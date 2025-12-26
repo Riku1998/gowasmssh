@@ -49,6 +49,7 @@ export function App() {
 					a.download = file.name;
 					a.click();
 					URL.revokeObjectURL(url);
+					document.removeChild(a);
 				});
 			}
 		}
@@ -235,6 +236,7 @@ export function App() {
 								}
 								if (clientRef.current) {
 									clientRef.current.disconnect();
+									setConnected(false);
 								}
 							}}
 						>

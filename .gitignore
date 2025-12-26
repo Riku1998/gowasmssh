@@ -4,3 +4,4 @@ webpage/public/ssh.wasm
 webpage/public/wasm_exec.js
 gowasmssh
 cf-workers/public
+.DS_Store
