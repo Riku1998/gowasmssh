@@ -4,7 +4,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch: # 支持手动点按钮运行
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,16 +13,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 安装Go，编译wasm（仓库根目录执行make client）
-      - name: Setup Go
+      # 重点：使用go 1.21，关闭toolchain，适配这个仓库Makefile
+      - name: Setup Go 1.21
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.21'
+          cache: true
 
       - name: Build WASM client
         run: make client
 
-      # 安装node+pnpm打包前端
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -33,13 +33,12 @@ jobs:
         with:
           version: 9
 
-      - name: Install dependencies && build webpage
+      - name: Install dependencies & build webpage
         working-directory: ./webpage
         run: |
           pnpm install
           pnpm build
 
-      # 打包dist，构建完成后下载
       - name: Upload dist zip
         uses: actions/upload-artifact@v4
         with:
