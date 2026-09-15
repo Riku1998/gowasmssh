@@ -1,50 +1,47 @@
-name: deploy to workers
-
+name: Build Frontend Only (输出dist，不部署worker)
 on:
-    workflow_dispatch:
-        inputs:
-            commit_id:
-                description: "tag or branch or commit id(sha1 value)"
-                required: true
-                type: string
-                default: "main"
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: # 支持手动点按钮运行
 
 jobs:
-    build:
-        name: deploy
-        runs-on: macos-latest
-        steps:
-            - name: Checkout source code
-              uses: actions/checkout@v3
-              with:
-                ref: ${{ github.ref }}
-                fetch-depth: 0
-            - name: Setup Node
-              uses: actions/setup-node@v3
-              with:
-                node-version: 22
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-            - name: Install pnpm
-              shell: bash
-              run: npm i -g pnpm
+      # 安装Go，编译wasm（仓库根目录执行make client）
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
 
-            - name: Setup Go
-              uses: actions/setup-go@v4
-              with:
-                go-version: '1.23'
+      - name: Build WASM client
+        run: make client
 
-            - name: install deps
-              shell: bash
-              run: make deps
+      # 安装node+pnpm打包前端
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
 
-            - name: prepare deploy files
-              shell: bash
-              run: make cfdeps
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
-            - name: deploy
-              uses: cloudflare/wrangler-action@v3
-              with:
-                apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-                accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-                workingDirectory: "cf-workers"
-                
+      - name: Install dependencies && build webpage
+        working-directory: ./webpage
+        run: |
+          pnpm install
+          pnpm build
+
+      # 打包dist，构建完成后下载
+      - name: Upload dist zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: webpage-dist
+          path: webpage/dist
