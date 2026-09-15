@@ -1,217 +1,71 @@
-name: Build GoWasmSSH Pages
+name: Build GoWasmSSH dist
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   build:
-    name: Build Cloudflare Pages package
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout
-      - name: Checkout
+      - name: Checkout GoWasmSSH
         uses: actions/checkout@v5
+        with:
+          repository: wrtx-dev/gowasmssh
 
-      # 2. Setup Go
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
-          cache: true
+          go-version: '1.23.3'
 
-      # 3. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: webpage/package-lock.json
 
-      # 4. Install pnpm
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
-      # 5. Verify tools
-      - name: Check environment
-        run: |
-          echo "Go:"
-          go version
-
-          echo "Node:"
-          node --version
-
-          echo "pnpm:"
-          pnpm --version
-
-      # 6. Download Go dependencies
       - name: Download Go dependencies
         run: go mod download
 
-      # 7. Install frontend dependencies
-      - name: Install frontend dependencies
-        working-directory: webpage
-        run: pnpm install --frozen-lockfile=false
-
-      # 8. Build WebAssembly
-      - name: Build SSH WASM
+      - name: Build WebAssembly
         run: |
           mkdir -p webpage/public
 
           GOOS=js GOARCH=wasm \
-            go build \
-            -ldflags="-w -s" \
+            go build -ldflags="-w -s" \
             -o webpage/public/ssh.wasm
 
-          cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" \
+          cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" \
             webpage/public/wasm_exec.js
 
-      # 9. Configure local WebSocket proxy
-      - name: Configure local SSH proxy
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
+      - name: Install frontend dependencies
+        working-directory: webpage
+        run: pnpm install
 
-          path = Path("webpage/src/index.jsx")
-          text = path.read_text(encoding="utf-8")
-
-          old = '''const defaultProxy = window.location.protocol === "https:" ? "wss://" + window.location.host + "/ws" : "ws://" + window.location.host + "/ws";'''
-
-          new = '''const defaultProxy = "ws://127.0.0.1:9090";'''
-
-          if old not in text:
-              print("Current index.jsx does not contain the expected defaultProxy line.")
-              print("Searching for defaultProxy:")
-              for line in text.splitlines():
-                  if "defaultProxy" in line:
-                      print(line)
-              raise SystemExit(1)
-
-          path.write_text(text.replace(old, new), encoding="utf-8")
-
-          print("Successfully changed default proxy:")
-          print("ws://127.0.0.1:9090")
-          PY
-
-      # 10. Build frontend
       - name: Build frontend
         working-directory: webpage
         run: pnpm build
 
-      # 11. Verify Pages output
-      - name: Verify build
+      - name: Check dist
         run: |
-          set -e
-
-          echo "Checking build output..."
-
-          test -f webpage/dist/index.html
-          test -f webpage/dist/ssh.wasm
-          test -f webpage/dist/wasm_exec.js
-
+          echo "===== webpage/dist ====="
+          find webpage/dist -maxdepth 2 -type f -print
           echo
-          echo "Build successful!"
-          echo
-          echo "Files:"
-          find webpage/dist -type f | sort
-
-          echo
-          echo "Total size:"
+          echo "===== dist size ====="
           du -sh webpage/dist
 
-      # 12. Package Pages
-      - name: Package Pages
+      - name: Package dist
         run: |
-          cd webpage/dist
-          zip -r ../../gowasmssh-pages.zip .
+          cd webpage
+          zip -r ../gowasmssh-dist.zip dist
 
-      # 13. Build Windows local proxy
-      - name: Build Windows proxy
-        run: |
-          mkdir -p proxy
-
-          CGO_ENABLED=0 \
-          GOOS=windows \
-          GOARCH=amd64 \
-          go build \
-            -ldflags="-w -s" \
-            -o proxy/gowasmssh-windows-amd64.exe \
-            .
-
-      # 14. Build Linux local proxy
-      - name: Build Linux proxy
-        run: |
-          CGO_ENABLED=0 \
-          GOOS=linux \
-          GOARCH=amd64 \
-          go build \
-            -ldflags="-w -s" \
-            -o proxy/gowasmssh-linux-amd64 \
-            .
-
-      # 15. Create proxy instructions
-      - name: Create proxy README
-        run: |
-          cat > proxy/README.txt <<'EOF'
-          GoWasmSSH Local WebSocket Proxy
-          =================================
-
-          Windows:
-              gowasmssh-windows-amd64.exe
-
-          Linux:
-              chmod +x gowasmssh-linux-amd64
-              ./gowasmssh-linux-amd64
-
-          Default WebSocket address:
-
-              ws://127.0.0.1:9090
-
-          The proxy converts:
-
-              WebSocket :9090
-                    ↓
-                 TCP :22
-
-          The SSH client itself runs inside the browser's WebAssembly.
-
-          After starting the proxy, open the GoWasmSSH web page.
-
-          SSH server:
-              127.0.0.1
-
-          SSH port:
-              22
-
-          Proxy:
-              ws://127.0.0.1:9090
-          EOF
-
-      # 16. Package local proxy
-      - name: Package local proxy
-        run: |
-          cd proxy
-          zip -r ../gowasmssh-local-proxy.zip .
-
-      # 17. Upload Pages artifact
-      - name: Upload Pages package
+      - name: Upload dist ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: gowasmssh-pages
-          path: gowasmssh-pages.zip
+          name: gowasmssh-dist
+          path: gowasmssh-dist.zip
           if-no-files-found: error
-          retention-days: 30
-
-      # 18. Upload proxy artifact
-      - name: Upload local proxy
-        uses: actions/upload-artifact@v4
-        with:
-          name: gowasmssh-local-proxy
-          path: gowasmssh-local-proxy.zip
-          if-no-files-found: error
-          retention-days: 30
