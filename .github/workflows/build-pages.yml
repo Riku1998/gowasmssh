@@ -1,0 +1,196 @@
+name: Build GoWasmSSH Pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Cloudflare Pages package
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 拉取仓库
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. 安装 Go
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      # 3. 安装 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: webpage/pnpm-lock.yaml
+
+      # 4. 安装 pnpm
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+
+      # 5. 下载 Go 依赖
+      - name: Download Go dependencies
+        run: go mod download
+
+      # 6. 安装前端依赖
+      - name: Install frontend dependencies
+        working-directory: webpage
+        run: pnpm install --frozen-lockfile
+
+      # 7. 编译 Go WASM
+      - name: Build SSH WASM
+        run: |
+          mkdir -p webpage/public
+
+          GOOS=js GOARCH=wasm \
+            go build \
+            -ldflags="-w -s" \
+            -o webpage/public/ssh.wasm
+
+          cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" \
+            webpage/public/wasm_exec.js
+
+      # 8. 把默认 WebSocket Proxy 改成客户电脑本机
+      - name: Configure local SSH proxy
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("webpage/src/index.jsx")
+          text = path.read_text(encoding="utf-8")
+
+          old = '''const defaultProxy = window.location.protocol === "https:" ? "wss://" + window.location.host + "/ws" : "ws://" + window.location.host + "/ws";'''
+
+          new = '''const defaultProxy = "ws://127.0.0.1:9090";'''
+
+          if old not in text:
+              raise SystemExit(
+                  "无法找到 GoWasmSSH 当前版本的 defaultProxy 定义，"
+                  "请检查上游仓库是否修改了网页代码。"
+              )
+
+          text = text.replace(old, new)
+
+          path.write_text(text, encoding="utf-8")
+          print("Default proxy changed to ws://127.0.0.1:9090")
+          PY
+
+      # 9. 构建前端
+      - name: Build frontend
+        working-directory: webpage
+        run: pnpm build
+
+      # 10. 检查构建结果
+      - name: Verify Pages build
+        run: |
+          set -e
+
+          test -f webpage/dist/index.html
+          test -f webpage/dist/ssh.wasm
+          test -f webpage/dist/wasm_exec.js
+
+          echo "======================================"
+          echo "Cloudflare Pages build successful"
+          echo "======================================"
+          echo
+          echo "Files:"
+          find webpage/dist -type f | sort
+          echo
+          echo "Size:"
+          du -sh webpage/dist
+
+      # 11. 打包 Cloudflare Pages
+      - name: Package Cloudflare Pages
+        run: |
+          cd webpage/dist
+          zip -r ../../gowasmssh-pages.zip .
+
+      # 12. 同时编译本地 Proxy
+      - name: Build local proxy - Linux amd64
+        run: |
+          mkdir -p proxy
+
+          CGO_ENABLED=0 \
+          GOOS=linux \
+          GOARCH=amd64 \
+          go build \
+            -ldflags="-w -s" \
+            -o proxy/gowasmssh-linux-amd64 \
+            .
+
+      - name: Build local proxy - Windows amd64
+        run: |
+          CGO_ENABLED=0 \
+          GOOS=windows \
+          GOARCH=amd64 \
+          go build \
+            -ldflags="-w -s" \
+            -o proxy/gowasmssh-windows-amd64.exe \
+            .
+
+      # 13. 创建客户电脑使用说明
+      - name: Create proxy package
+        run: |
+          cat > proxy/README.txt <<'EOF'
+          GoWasmSSH 本地 WebSocket → TCP 代理
+          ====================================
+
+          默认监听：
+              127.0.0.1:9090
+
+          Windows：
+              gowasmssh-windows-amd64.exe
+
+          Linux：
+              chmod +x gowasmssh-linux-amd64
+              ./gowasmssh-linux-amd64
+
+          启动后保持窗口运行。
+
+          然后打开 Cloudflare Pages 上的 GoWasmSSH，
+          SSH 连接设置中的代理地址默认已经是：
+
+              ws://127.0.0.1:9090
+
+          SSH 主机地址填写：
+
+              127.0.0.1
+
+          SSH 端口：
+
+              22
+
+          注意：
+          本代理只是 WebSocket → TCP 转换器。
+          SSH 客户端仍然运行在浏览器 WASM 中。
+          EOF
+
+          zip -r gowasmssh-local-proxy.zip proxy
+
+      # 14. 上传 Pages ZIP
+      - name: Upload Cloudflare Pages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gowasmssh-pages
+          path: gowasmssh-pages.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      # 15. 上传本地 Proxy
+      - name: Upload local proxy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gowasmssh-local-proxy
+          path: gowasmssh-local-proxy.zip
+          if-no-files-found: error
+          retention-days: 30
